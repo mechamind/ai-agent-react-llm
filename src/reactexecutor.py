@@ -1,155 +1,66 @@
-import inspect
 import json
-
-from brain import Brain
-from common import AgentConfig, Agent, ReactEnd, Tool, ToolChoice
-
+from tic_tac_toe import TicTacToe
+from ai_agent import AIAgent
 
 class ReActExecutor:
-    def __init__(self, config: AgentConfig, agent: Agent) -> None:
-        self.base_agent = agent
-        self.config = config
-        self.request = ""
-        self.brain = Brain(config)
+    def __init__(self, agent_x: AIAgent, agent_o: AIAgent, game: TicTacToe):
+        """Initialize ReAct logic with AI agents and game."""
+        self.agent_x = agent_x
+        self.agent_o = agent_o
+        self.game = game
+        self.memory = []  # Store past moves for reasoning
 
-    def execute(self, query_input: str) -> str:
-        print(f"Request: {query_input}")
-        self.request = query_input
-        total_interactions = 0
-        agent = self.base_agent
-        while True:
-            total_interactions += 1
-            if self.config.max_interactions <= total_interactions:
-                print("I'm out of attempts. Exiting now.")
-                return ""
+    def remember(self, message: str):
+        """Store game state in memory."""
+        self.memory.append(message)
 
-            print("Current Agent: ", agent.name)
-            self.__thought(agent)
-            agent, skip = self.__action(agent)
-            if skip:
-                continue
-            observation = self.__observation(agent)
-            if observation.stop:
-                print("Thought: I now know the final answer. \n")
-                print(f"Final Answer: {observation.final_answer}")
-                return observation.final_answer
+    def recall(self):
+        """Return past moves as memory context."""
+        return "\n".join(self.memory)
 
-    @staticmethod
-    def __get_tools(agent: Agent) -> str:
-        tools = [tool for tool in agent.functions if isinstance(tool, Tool)]
-        str_tools = [tool.name + " - " + tool.desc for tool in tools]
-        return "\n".join(str_tools)
+    def execute(self):
+        """Runs the game with ReAct logic."""
+        print("AI vs AI Tic-Tac-Toe - ReAct Mode\n")
+        self.game.display_board()
 
-    def __thought(self, current_agent: Agent) -> None:
-        tools = self.__get_tools(current_agent)
-        prompt = f"""Answer the following request as best you can: {self.request}.
+        for turn in range(9):  # Max 9 moves
+            current_agent = self.agent_x if turn % 2 == 0 else self.agent_o
+            print(f"{current_agent.name} ({current_agent.symbol}) is thinking...")
+
+            # AI decides the move based on board state and past moves
+            query = f"""
+            The current Tic-Tac-Toe board state is:
+            {json.dumps(self.game.board)}
+
+            Past moves:
+            {self.recall()}
+
+            Your mark is '{current_agent.symbol}'. Play a valid move.
+            Return JSON: {{"row": 1, "col": 1}}
+            """
             
-            First think step by step about what to do. Plan step by step what to do.
-            Continuously adjust your reasoning based on intermediate results and reflections, adapting your strategy as you progress.
-            Your goal is to demonstrate a thorough, adaptive, and self-reflective problem-solving process, emphasizing dynamic thinking and learning from your own reasoning.
+            move_json = current_agent.choose_move(self.game)  # AI selects move
+            move = json.loads(move_json)
 
-            Make sure to include the available tools in your plan.
+            if "error" in move:
+                print(move["error"])
+                break
 
-            Your available tools are: 
-            {tools}
+            row, col = move["row"], move["col"]
+            self.game.make_move(row, col)  # Apply move
 
-            CONTEXT HISTORY:
-            ---
-            {self.brain.recall()}
-        """
-        response = self.brain.think(prompt=prompt, agent=current_agent)
-        print(f"============= Thought =============")
-        print(f"Thought response: {response} \n")
-        self.brain.remember("Assistant: " + response)
+            # Store memory for future turns
+            self.remember(json.dumps({"player": current_agent.symbol, "move": (row, col)}))
 
-    def __action(self, agent: Agent) -> tuple[Agent, bool]:
-        tool = self.__choose_action(agent)
-        if tool:
-            if isinstance(tool.func, Agent):
-                agent = tool.func
-                print(f"Switching to the Agent: {agent.name} \n")
-                return agent, True
+            self.game.display_board()
 
-            self.__execute_action(tool, agent)
-        else:
-            print("No tool found")
-            agent = self.base_agent
-            return agent, True
-        return agent, False
+            # Check for winner
+            winner = self.game.check_winner()
+            if winner:
+                print(f"🎉 {current_agent.name} ({winner}) wins! Game Over!")
+                break
 
-    def __observation(self, current_agent: Agent) -> ReactEnd:
-        prompt = f"""Is the context information  enough to finally answer to this request: {self.request}?
-       
-            Assign a quality confidence score between 0.0 and 1.0 to guide your approach:
-            - 0.8+: Continue current approach
-            - 0.5-0.7: Consider minor adjustments
-            - Below 0.5: Seriously consider backtracking and trying a different approach
-            
-            CONTEXT HISTORY:
-            ---
-            {self.brain.recall()}
-            """
-        response: ReactEnd = self.brain.think(prompt=prompt, agent=current_agent, output_format=ReactEnd)
-        self.brain.remember("Assistant: " + response.final_answer)
-        self.brain.remember("Assistant: " + f"Confidence score: {response.confidence}")
-
-        print("\n ============== Observation ============ \n")
-        print(f"Observation: {response.final_answer} \n")
-        print(f"Approach Confidence score: {response.confidence} \n")
-
-        return response
-
-    def __choose_action(self, agent: Agent) -> Tool:
-        tools = self.__get_tools(agent)
-        prompt = f"""To Answer the following request as best you can: {self.request}.
-            Choose the tool to use if need be. The tool should be among:
-            {tools}
-
-            CONTEXT HISTORY:
-            ---
-            {self.brain.recall()}
-            """
-        response: ToolChoice = self.brain.think(prompt, agent=agent, output_format=ToolChoice)
-        message = f""" Assistant: I should use this tool: {response.tool_name}. Reason: {response.reason_of_choice}"""
-        self.brain.remember(message)
-
-        tool = [tool for tool in agent.functions if tool.name == response.tool_name]
-        return tool[0] if tool else None
-
-    def __execute_action(self, tool: Tool, agent: Agent):
-        if tool is None:
-            return
-
-        print(f"\n ================== Executing: {tool.name} ================\n")
-
-        prompt = f"""To Answer the following request as best you can: {self.request}.
-            Determine the inputs to send to the tool: {tool.name}
-            Given that the function signature of the tool function is: {inspect.signature(tool.func)}.
-
-            CONTEXT HISTORY:
-            ---
-            {self.brain.recall()}
-            """
-        parameters = inspect.signature(tool.func).parameters
-        response = {}
-        if len(parameters) > 0:
-            prompt += f"""RESPONSE FORMAT:
-            {{
-                {', '.join([f'"{param}": <function parameter>' for param in parameters])}
-            }}"""
-            response = self.brain.think(prompt=prompt, agent=agent)
-            self.brain.remember("Assistant: " + response)
-
-            try:
-                response = json.loads(response)
-            except Exception as e:
-                print(f"Error in parsing response: {e}")
-                print(f"Invalid response: {response}")
-                self.brain.remember("Assistant: Error in parsing json response")
-                return
-
-        action_result = tool.func(**response)
-        msg = f"Tool Result: {action_result}"
-        print(f"Tool Params: {response}")
-        print(msg)
-        self.brain.remember(f"Assistant: {msg}")
+            # Check for draw
+            if self.game.is_draw():
+                print("😲 It's a draw! Game Over!")
+                break

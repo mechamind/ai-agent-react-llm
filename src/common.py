@@ -1,49 +1,36 @@
-from typing import Union, Callable, List, Any
-
+from typing import List, Callable, Union
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
-# from version2.utils import function_to_json
-
-
 class ToolChoice(BaseModel):
-    """Data model for the tool choice"""
+    """Data model for choosing a tool in ReAct logic."""
     tool_name: str = Field(..., description="Name of the tool to use")
     reason_of_choice: str = Field(..., description="Reason for choosing the tool")
 
 class ReactEnd(BaseModel):
-    """Data model for the observation step"""
-    stop: bool = Field(..., description="True if the context is enough to answer the request else False")
-    final_answer: str = Field(..., description="Final answer if the context is enough to answer the request")
+    """Data model for the observation step."""
+    stop: bool = Field(..., description="True if the game is over, else False")
+    final_answer: str = Field(..., description="Final answer if the game is over")
     confidence: float = Field(..., description="Confidence score of the final answer")
 
-
 class Tool:
-    def __init__(self, name: str, func, desc) -> None:
-        self.desc = desc
+    """Defines a tool that the AI agent can use."""
+    def __init__(self, name: str, func: Callable, desc: str) -> None:
         self.name = name
         self.func = func
-
+        self.desc = desc
 
 class Agent(BaseModel):
-    name: str = "Agent"
-    model: str = "deepseek-r1-distill-llama-8b"
-    instructions: Union[str, Callable[[], str]] = "You are a helpful agent."
-    functions: List = []
-#     parallel_tool_calls: bool = True
-#     tool_choice: str = None
-
-#     def tools_in_json(self):
-#         return [function_to_json(f) for f in self.functions]
-
-#     def get_instructions(self, context_variables: dict = {}) -> str:
-#         if callable(self.instructions):
-#             return self.instructions(context_variables)
-#         return self.instructions
+    """Defines an AI Agent that plays Tic-Tac-Toe using ReAct logic."""
+    name: str
+    model: str
+    instructions: str
+    functions: List[Tool]
 
 class AgentConfig:
+    """Configuration settings for AI execution."""
     def __init__(self):
-        self.max_interactions = 3
+        self.max_interactions = 10
         self.model = None
         self.token_limit: int = 5000
 
@@ -57,3 +44,4 @@ class AgentConfig:
 
     def with_max_interactions(self, max_int: int):
         self.max_interactions = max_int
+        return self
